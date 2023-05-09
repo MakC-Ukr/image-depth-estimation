@@ -14,14 +14,11 @@ def retrieve_sift_features(img1, img2):
     matches = bf.match(des1,des2)
     final_matches = sorted(matches, key = lambda x:x.distance)[:TOP_MATCHES_FOR_FEATURES]
     img_with_keypoints = cv2.drawMatches(img1,kp1,img2,kp2,final_matches,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-    # Getting x,y coordinates of the matches
     left_feature_points = [list(kp1[mat.queryIdx].pt) for mat in final_matches] 
     right_feature_points = [list(kp2[mat.trainIdx].pt) for mat in final_matches]
     left_points = np.float32([kp1[m.queryIdx].pt for m in matches])
     right_points = np.float32([kp2[m.trainIdx].pt for m in matches])
     return left_feature_points, right_feature_points, left_points, right_points, img_with_keypoints
-
-
 
 
 def calculate_F_matrix(left_points, right_points):
@@ -75,14 +72,12 @@ def calc_F_M(list_of_cood_list):
             inliers_img2 = tmp_inliers_img2
     return Best_F
 
-# Its all about resolution - Its a trade off between resolution and time of computation
 def rectify_images(img1, img2, pts1, pts2, F):
     # TODO: add ref https://www.andreasjakl.com/understand-and-apply-stereo-rectification-for-depth-maps-part-2/
     retBool ,homography_mat1, homography_mat2 = cv2.stereoRectifyUncalibrated(np.float32(pts1), np.float32(pts2), F, imgSize=(WIDTH_IDEAL, HEIGHT_IDEAL))
     left_rectified = np.zeros((pts1.shape), dtype=int)
     right_rectified = np.zeros((pts2.shape), dtype=int)
 
-    # Rectify the feature points
     for i in range(pts1.shape[0]):
         temp_location = np.dot(homography_mat1, np.array([pts1[i][0], pts1[i][1], 1]))
         temp_location = temp_location/temp_location[2]
@@ -94,8 +89,6 @@ def rectify_images(img1, img2, pts1, pts2, F):
         temp_location2 = temp_location2/temp_location2[2]
         temp_location2 = temp_location2[:2]
         right_rectified[i] = temp_location2
-
-    # Rectify the images and save them
     img1_rectified = cv2.warpPerspective(img1, homography_mat1, (WIDTH_IDEAL, HEIGHT_IDEAL))
     img2_rectified = cv2.warpPerspective(img2, homography_mat2, (WIDTH_IDEAL, HEIGHT_IDEAL))
     return left_rectified, right_rectified, img1_rectified, img2_rectified
