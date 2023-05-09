@@ -1,26 +1,8 @@
-import os
-import json
-import re
-import math
-import cv2
-import random as rd
-from tqdm import tqdm
-import numpy as np  
-import matplotlib.pyplot as plt
-import time
-
-# 1. Remove all TODOs
-# 2. Remove all print statements
-# 3. Try with ORB and SIFT
-# 4. Try with different features
-
-WIDTH_IDEAL = 256
-HEIGHT_IDEAL = 256
-TOP_MATCHES_FOR_FEATURES=50
+from global_imports import * 
 
 def retrieve_sift_features(img1, img2):
     # TODO: add source https://stackoverflow.com/questions/36172913/opencv-depth-map-from-uncalibrated-stereo-system 
-    orb = cv2.ORB_create(nfeatures=10000)
+    orb = SIFT_create(nfeatures=10000)
     kp1, des1 = orb.detectAndCompute(img1,None)
     kp2, des2 = orb.detectAndCompute(img2,None)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
@@ -28,24 +10,21 @@ def retrieve_sift_features(img1, img2):
     final_matches = sorted(matches, key = lambda x:x.distance)[:TOP_MATCHES_FOR_FEATURES]
     img_with_keypoints = cv2.drawMatches(img1,kp1,img2,kp2,final_matches,None,flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
     # Getting x,y coordinates of the matches
-    list_kp1 = [list(kp1[mat.queryIdx].pt) for mat in final_matches] 
-    list_kp2 = [list(kp2[mat.trainIdx].pt) for mat in final_matches]
+    left_feature_points = [list(kp1[mat.queryIdx].pt) for mat in final_matches] 
+    right_feature_points = [list(kp2[mat.trainIdx].pt) for mat in final_matches]
     left_points = np.float32([kp1[m.queryIdx].pt for m in matches])
     right_points = np.float32([kp2[m.trainIdx].pt for m in matches])
-    return list_kp1, list_kp2, left_points, right_points, img_with_keypoints
+    return left_feature_points, right_feature_points, left_points, right_points, img_with_keypoints
 
 
 
 
-def calculate_F_matrix(list_kp1, list_kp2):
-    """This function is used to calculate the F matrix from a set of 8 points using SVD.
-        Furthermore, the rank of F matrix is reduced from 3 to 2 to make the epilines converge."""
+def calculate_F_matrix(left_points, right_points):
+    A = np.zeros(shape=(len(left_points), 9))
 
-    A = np.zeros(shape=(len(list_kp1), 9))
-
-    for i in range(len(list_kp1)):
-        x1, y1 = list_kp1[i][0], list_kp1[i][1]
-        x2, y2 = list_kp2[i][0], list_kp2[i][1]
+    for i in range(len(left_points)):
+        x1, y1 = left_points[i][0], left_points[i][1]
+        x2, y2 = right_points[i][0], right_points[i][1]
         A[i] = np.array([x1*x2, x1*y2, x1, y1*x2, y1*y2, y1, x2, y2, 1])
 
     U, s, Vt = np.linalg.svd(A)
@@ -62,105 +41,110 @@ def calculate_F_matrix(list_kp1, list_kp2):
     F = np.dot(Uf, np.dot(s, Vft))
     return F
 
-def RANSAC_F_matrix(list_of_cood_list):
-    """This method is used to shortlist the best F matrix using RANSAC based on the number of inliers."""
-    
-    list_kp1 = list_of_cood_list[0]
-    list_kp2 = list_of_cood_list[1]
-    pairs = list(zip(list_kp1, list_kp2))  
-    max_inliers = 20
-    threshold = 0.05  # Tune this value
+def calc_F_M(list_of_cood_list):
+    left_feature_points = list_of_cood_list[0]
+    right_feature_points = list_of_cood_list[1]
+    pairs = list(zip(left_feature_points, right_feature_points))  
   
     for i in range(1000):
         pairs = rd.sample(pairs, 8)  
-        rd_list_kp1, rd_list_kp2 = zip(*pairs) 
-        F = calculate_F_matrix(rd_list_kp1, rd_list_kp2)
+        rd_left_feature_points, rd_right_feature_points = zip(*pairs) 
+        F = calculate_F_matrix(rd_left_feature_points, rd_right_feature_points)
         
         tmp_inliers_img1 = []
         tmp_inliers_img2 = []
 
-        for i in range(len(list_kp1)):
-            img1_x = np.array([list_kp1[i][0], list_kp1[i][1], 1])
-            img2_x = np.array([list_kp2[i][0], list_kp2[i][1], 1])
+        for i in range(len(left_feature_points)):
+            img1_x = np.array([left_feature_points[i][0], left_feature_points[i][1], 1])
+            img2_x = np.array([right_feature_points[i][0], right_feature_points[i][1], 1])
             distance = abs(np.dot(img2_x.T, np.dot(F,img1_x)))
-            # print(distance)
-
             if distance < threshold:
-                tmp_inliers_img1.append(list_kp1[i])
-                tmp_inliers_img2.append(list_kp2[i])
+                tmp_inliers_img1.append(left_feature_points[i])
+                tmp_inliers_img2.append(right_feature_points[i])
 
         num_of_inliers = len(tmp_inliers_img1)
-
-        if num_of_inliers > max_inliers:
-            print("Number of inliers", num_of_inliers)
+        if num_of_inliers > 20:
             max_inliers = num_of_inliers
             Best_F = F
             inliers_img1 = tmp_inliers_img1
             inliers_img2 = tmp_inliers_img2
     return Best_F
 
-def drawlines(img1src, img2src, lines, pts1src, pts2src):
-    """This fucntion is used to visualize the epilines on the images
-        img1 - image on which we draw the epilines for the points in img2
-        lines - corresponding epilines """
-    r, c = img1src.shape
-    img1color = cv2.cvtColor(img1src, cv2.COLOR_GRAY2BGR)
-    img2color = cv2.cvtColor(img2src, cv2.COLOR_GRAY2BGR)
-    # Edit: use the same random seed so that two images are comparable!
-    np.random.seed(0)
-    for r, pt1, pt2 in zip(lines, pts1src, pts2src):
-        color = tuple(np.random.randint(0, 255, 3).tolist())
-        x0, y0 = map(int, [0, -r[2]/r[1]])
-        x1, y1 = map(int, [c, -(r[2]+r[0]*c)/r[1]])
-        img1color = cv2.line(img1color, (x0, y0), (x1, y1), color, 1)
-        img1color = cv2.circle(img1color, tuple(pt1), 5, color, -1)
-        img2color = cv2.circle(img2color, tuple(pt2), 5, color, -1)
-    
-    return img1color, img2color
-
-
 # Its all about resolution - Its a trade off between resolution and time of computation
 def rectification(img1, img2, pts1, pts2, F):
-    """This function is used to rectify the images to make camera pose's parallel and thus make epiplines as horizontal.
-        Since camera distortion parameters are not given we will use cv2.stereoRectifyUncalibrated(), instead of stereoRectify().
-    """
-
-    # Stereo rectification
-    _, H1, H2 = cv2.stereoRectifyUncalibrated(np.float32(pts1), np.float32(pts2), F, imgSize=(WIDTH_IDEAL, HEIGHT_IDEAL))
-    # print("H1",H1)
-    # print("H2",H2)
-    rectified_pts1 = np.zeros((pts1.shape), dtype=int)
-    rectified_pts2 = np.zeros((pts2.shape), dtype=int)
+    # TODO: add ref https://www.andreasjakl.com/understand-and-apply-stereo-rectification-for-depth-maps-part-2/
+    retBool ,homography_mat1, homography_mat2 = cv2.stereoRectifyUncalibrated(np.float32(pts1), np.float32(pts2), F, imgSize=(WIDTH_IDEAL, HEIGHT_IDEAL))
+    left_rectified = np.zeros((pts1.shape), dtype=int)
+    right_rectified = np.zeros((pts2.shape), dtype=int)
 
     # Rectify the feature points
     for i in range(pts1.shape[0]):
-        source1 = np.array([pts1[i][0], pts1[i][1], 1])
-        new_point1 = np.dot(H1, source1)
-        new_point1[0] = int(new_point1[0]/new_point1[2])
-        new_point1[1] = int(new_point1[1]/new_point1[2])
-        new_point1 = np.delete(new_point1, 2)
-        rectified_pts1[i] = new_point1
-
-        source2 = np.array([pts2[i][0], pts2[i][1], 1])
-        new_point2 = np.dot(H2, source2)
-        new_point2[0] = int(new_point2[0]/new_point2[2])
-        new_point2[1] = int(new_point2[1]/new_point2[2])
-        new_point2 = np.delete(new_point2, 2)
-        rectified_pts2[i] = new_point2
+        temp_location = np.dot(homography_mat1, np.array([pts1[i][0], pts1[i][1], 1]))
+        temp_location = temp_location/temp_location[2]
+        temp_location = temp_location[:2]
+        left_rectified[i] = temp_location
+    
+    for i in range(pts1.shape[0]):
+        temp_location2 = np.dot(homography_mat2, np.array([pts2[i][0], pts2[i][1], 1]))
+        temp_location2 = temp_location2/temp_location2[2]
+        temp_location2 = temp_location2[:2]
+        right_rectified[i] = temp_location2
 
     # Rectify the images and save them
-    img1_rectified = cv2.warpPerspective(img1, H1, (WIDTH_IDEAL, HEIGHT_IDEAL))
-    img2_rectified = cv2.warpPerspective(img2, H2, (WIDTH_IDEAL, HEIGHT_IDEAL))
+    img1_rectified = cv2.warpPerspective(img1, homography_mat1, (WIDTH_IDEAL, HEIGHT_IDEAL))
+    img2_rectified = cv2.warpPerspective(img2, homography_mat2, (WIDTH_IDEAL, HEIGHT_IDEAL))
+    return left_rectified, right_rectified, img1_rectified, img2_rectified
+
+def closest_index(y, x, block_left, right_array, block_size, x_search_block_size, y_search_block_size):
+    # TODO: Add ref https://pramod-atre.medium.com/disparity-map-computation-in-python-and-c-c8113c63d701 
+    x_min = max(0, x - x_search_block_size)
+    x_max = min(right_array.shape[1], x + x_search_block_size)
+    y_min = max(0, y - y_search_block_size)
+    y_max = min(right_array.shape[0], y + y_search_block_size)
     
-    f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "rectified_1.png")
-    cv2.imwrite(f_path, img1_rectified)
-    f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "rectified_2.png")
-    cv2.imwrite(f_path, img2_rectified)
+    first = True
+    min_ssd = None
+    min_index = None
+
+    for y in range(y_min, y_max):
+        for x in range(x_min, x_max):
+            block_right = right_array[y: y+block_size, x: x+block_size]
+            if block_left.shape != block_right.shape:
+                ssd =  -1
+            elif block_left.shape == block_right.shape: 
+                ssd_values = (block_left - block_right)**2
+                ssd = np.sum(ssd_values)
+
+            if first:
+                min_ssd = ssd
+                min_index = (y, x)
+                first = False
+            else:
+                if ssd < min_ssd:
+                    min_ssd = ssd
+                    min_index = (y, x)
+
+    return min_index
+
+
+def find_disparity_map(img1, img2):
+    block_size = 15 
+    x_search_block_size = 50 
+    y_search_block_size = 1
+    disparity_map = np.zeros((HEIGHT_IDEAL, WIDTH_IDEAL))
+
+    for y in tqdm(range(block_size, HEIGHT_IDEAL-block_size)):
+        for x in range(block_size, WIDTH_IDEAL-block_size):
+            block_left = img1[y:y + block_size, x:x + block_size]
+            index = closest_index(y, x, block_left, img2, block_size, x_search_block_size, y_search_block_size)
+            disparity_map[y, x] = abs(index[1] - x)
     
-    return rectified_pts1, rectified_pts2, img1_rectified, img2_rectified
-
-
-
+    disparity_map_unscaled = disparity_map.copy()
+    disparity_map = (disparity_map * 255) / (np.max(disparity_map) - np.min(disparity_map))
+    disparity_map = disparity_map.astype(int)
+    
+    disparity_map_scaled = disparity_map
+    return disparity_map_unscaled, disparity_map_scaled
 
 
 def main():
@@ -193,10 +177,6 @@ def main():
             elif line.startswith("baseline"):
                 variables["baseline"] = float(line.strip().split('=')[1])
                 baseline = float(line.strip().split('=')[1])
-            elif line.startswith("width"):
-                variables["width"] = int(line.strip().split('=')[1])
-            elif line.startswith("height"):
-                variables["height"] = int(line.strip().split('=')[1])
     
     f = K1[0][0]
 
@@ -205,11 +185,11 @@ def main():
     for i in tqdm(range(1000)):
         try:
             count+=1
-            list_kp1, list_kp2, left_points, right_points, img_withcharted_features = retrieve_sift_features(img1, img2)
+            left_feature_points, right_feature_points, left_points, right_points, img_withcharted_features = retrieve_sift_features(img1, img2)
             f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "img_withcharted_features.png")
             cv2.imwrite(f_path, img_withcharted_features)
             # fundamental matrix 
-            F = RANSAC_F_matrix([list_kp1, list_kp2])
+            F = calc_F_M([left_feature_points, right_feature_points])
             # essential matrix
             E = np.dot(F,K1)
             E = np.dot(K2.T, E)
@@ -223,7 +203,15 @@ def main():
                 print("Error in saving rotation and translation matrix")
                 print(e)
             try:
-                rectified_pts1, rectified_pts2, img1_rectified, img2_rectified = rectification(img1, img2, np.int32(list_kp1), np.int32(list_kp2), F)
+                left_rectified, right_rectified, img1_rectified, img2_rectified = rectification(img1, img2, np.int32(left_feature_points), np.int32(right_feature_points), F)
+                try:
+                    f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "rectified_1.png")
+                    cv2.imwrite(f_path, img1_rectified)
+                    f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "rectified_2.png")
+                    cv2.imwrite(f_path, img2_rectified)
+                except Exception as e:
+                    print("Error in saving rectified images")
+                    print(e)
             except Exception as e:
                 print("Error in rectification")
                 print(e)
@@ -233,6 +221,23 @@ def main():
             continue
     print("Time taken to get R and T matrix", time.time()-t, "s")
     t = time.time()
+    disparity_map_unscaled, disparity_map_scaled = find_disparity_map(img1_rectified, img2_rectified)
+    print("Time taken to get disparity map", time.time()-t, "s")
+    t = time.time()
+    disparity_map_unscaled_mean = disparity_map_unscaled[disparity_map_unscaled != 0].mean()
+    depth_map = np.zeros((HEIGHT_IDEAL, WIDTH_IDEAL))
+    depth_array = np.zeros((HEIGHT_IDEAL, WIDTH_IDEAL))
+    disparity_map_unscaled[disparity_map_unscaled == 0] = disparity_map_unscaled_mean  
+    for i in range(HEIGHT_IDEAL):
+        for j in range(WIDTH_IDEAL):
+            depth_array[i][j] = baseline*f/disparity_map_unscaled[i][j]
+
+    plt.title('Result-Depth Array')
+    plt.imshow(depth_array, cmap='gray')
+    f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "depth_array.png")
+    plt.savefig(f_path, bbox_inches='tight')
+    plt.close()
+    print("Time taken to get disparity map", time.time()-t, "s")
 
 if __name__ == "__main__":
     main()
