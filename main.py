@@ -1,6 +1,6 @@
 from global_imports import * 
 
-COEFF = 450
+COEFF = 128
 WIDTH_IDEAL = int(COEFF*1.77)
 HEIGHT_IDEAL = int(COEFF)
 TOP_MATCHES_FOR_FEATURES=60
