@@ -1,10 +1,15 @@
 from global_imports import * 
 
+COEFF = 450
+WIDTH_IDEAL = int(COEFF*1.77)
+HEIGHT_IDEAL = int(COEFF)
+TOP_MATCHES_FOR_FEATURES=60
+
 def retrieve_sift_features(img1, img2):
     # TODO: add source https://stackoverflow.com/questions/36172913/opencv-depth-map-from-uncalibrated-stereo-system 
-    orb = SIFT_create(nfeatures=10000)
-    kp1, des1 = orb.detectAndCompute(img1,None)
-    kp2, des2 = orb.detectAndCompute(img2,None)
+    sift = SIFT_create(nfeatures=10000)
+    kp1, des1 = sift.detectAndCompute(img1,None)
+    kp2, des2 = sift.detectAndCompute(img2,None)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(des1,des2)
     final_matches = sorted(matches, key = lambda x:x.distance)[:TOP_MATCHES_FOR_FEATURES]
@@ -46,7 +51,7 @@ def calc_F_M(list_of_cood_list):
     right_feature_points = list_of_cood_list[1]
     pairs = list(zip(left_feature_points, right_feature_points))  
   
-    for i in range(1000):
+    for i in range(10):
         pairs = rd.sample(pairs, 8)  
         rd_left_feature_points, rd_right_feature_points = zip(*pairs) 
         F = calculate_F_matrix(rd_left_feature_points, rd_right_feature_points)
@@ -63,7 +68,7 @@ def calc_F_M(list_of_cood_list):
                 tmp_inliers_img2.append(right_feature_points[i])
 
         num_of_inliers = len(tmp_inliers_img1)
-        if num_of_inliers > 20:
+        if num_of_inliers > 25:
             max_inliers = num_of_inliers
             Best_F = F
             inliers_img1 = tmp_inliers_img1
@@ -71,7 +76,7 @@ def calc_F_M(list_of_cood_list):
     return Best_F
 
 # Its all about resolution - Its a trade off between resolution and time of computation
-def rectification(img1, img2, pts1, pts2, F):
+def rectify_images(img1, img2, pts1, pts2, F):
     # TODO: add ref https://www.andreasjakl.com/understand-and-apply-stereo-rectification-for-depth-maps-part-2/
     retBool ,homography_mat1, homography_mat2 = cv2.stereoRectifyUncalibrated(np.float32(pts1), np.float32(pts2), F, imgSize=(WIDTH_IDEAL, HEIGHT_IDEAL))
     left_rectified = np.zeros((pts1.shape), dtype=int)
@@ -203,7 +208,7 @@ def main():
                 print("Error in saving rotation and translation matrix")
                 print(e)
             try:
-                left_rectified, right_rectified, img1_rectified, img2_rectified = rectification(img1, img2, np.int32(left_feature_points), np.int32(right_feature_points), F)
+                left_rectified, right_rectified, img1_rectified, img2_rectified = rectify_images(img1, img2, np.int32(left_feature_points), np.int32(right_feature_points), F)
                 try:
                     f_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "intermediate_steps", "rectified_1.png")
                     cv2.imwrite(f_path, img1_rectified)
